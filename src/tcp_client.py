@@ -2,6 +2,7 @@ import json
 import socket
 
 from src.device_client import DeviceClient
+from src.device import Device
 
 
 class TCPDeviceClient(DeviceClient):
@@ -14,7 +15,7 @@ class TCPDeviceClient(DeviceClient):
         self.host = host
         self.port = port
         self.timeout = timeout
-        self.socket = None
+        self.socket: socket.socket | None = None
 
     def connect(self) -> None:
         self.socket = socket.create_connection(
@@ -55,29 +56,56 @@ class TCPDeviceClient(DeviceClient):
 
             data += chunk
         return data.decode().strip()
-    
+
     def get_device_info(self) -> dict:
         return self.send_request({
             "command": "get_info"
         })
 
+    def get_device(self) -> Device:
+        response = self.get_device_info()
 
+        if response.get("status") != "ok":
+            raise ConnectionError("Could not read device information")
+
+        try:
+            major, minor = response["ios"].split(".", maxsplit=1)
+            return Device(
+                model=response["model"],
+                ios_version=(int(major), int(minor)),
+                battery_level=response["battery"],
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ConnectionError("Invalid device information") from error
+
+    def begin_attack(self, stage_count: int) -> None:
+        response = self.send_request({
+            "command": "begin_attack",
+            "stage_count": stage_count,
+        })
+
+        if response.get("status") != "ok":
+            raise RuntimeError(response.get("message", "Could not begin attack"))
     def run_stage(self, stage_name: str) -> bool:
         response = self.send_request({
             "command": "run_stage",
             "stage": stage_name,
         })
 
-        return response.get("result") == "success"
+        if response.get("status") != "ok":
+            raise RuntimeError(response.get("message", "Stage execution failed"))
 
+        return response.get("result") == "success"
 
     def list_files(self) -> list[str]:
         response = self.send_request({
             "command": "list_files"
         })
 
-        return response.get("files", [])
+        if response.get("status") != "ok":
+            raise PermissionError(response.get("message", "Access denied"))
 
+        return response.get("files", [])
 
     def read_file(self, path: str) -> bytes:
         response = self.send_request({
@@ -86,6 +114,9 @@ class TCPDeviceClient(DeviceClient):
         })
 
         if response.get("status") != "ok":
+            if response.get("message") == "Access denied":
+                raise PermissionError(path)
+
             raise FileNotFoundError(path)
 
         return response["data"].encode()

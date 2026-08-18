@@ -18,13 +18,20 @@ extracts files from a simulated device over TCP. The simulator is written in C.
   `TCPDeviceClient` implements it using the simulator's protocol.
 - `Extractor` reads one file or all files exposed by the device.
 
+The simulator keeps attack progress and an `unlocked` state per connection.
+Before an attack, the client announces its stage count. The simulator decrements
+that count after each successful stage and unlocks file access only when every
+stage has succeeded. A failed stage resets progress, and a new connection starts
+locked again.
+
 Stages can run without a device client for unit testing of the probabilistic
 model. In an integrated run, stage names are sent to the device and the device's
 result is authoritative; probabilities rank attacks rather than causing a
 second random decision.
 
-`AttackOrchestrator.run_and_extract()` connects the complete workflow: select an
-attack, run its stages, and extract all files after success. A normal stage
+`AttackOrchestrator.run_and_extract()` reads the current device information from
+the client and connects the complete workflow: select an attack, run its stages,
+and extract all files after success. A normal stage
 failure allows fallback to another attack. A transport failure raises
 `ConnectionError` because device state is unknown and retrying may be unsafe.
 
@@ -37,6 +44,7 @@ JSON object.
 | Operation | Request | Successful response |
 | --- | --- | --- |
 | Device info | `{"command":"get_info"}` | `{"status":"ok","model":"iPhone14","ios":"17.2","battery":80}` |
+| Begin attack | `{"command":"begin_attack","stage_count":2}` | `{"status":"ok"}` |
 | Run stage | `{"command":"run_stage","stage":"stage_1"}` | `{"status":"ok","result":"success"}` |
 | List files | `{"command":"list_files"}` | `{"status":"ok","files":[...]}` |
 | Read file | `{"command":"read_file","path":"/data/contacts.txt"}` | `{"status":"ok","data":"Alice,123456"}` |
@@ -47,7 +55,9 @@ Simulator-only stage names used to exercise failures:
 - `fail_stage` returns a normal `failure` result.
 - `drop_connection` closes the connection without a response.
 
-Unknown commands and missing files return `"status":"error"`. File payloads
+Until all announced stages succeed, file operations return
+`{"status":"error","message":"Access denied"}`. Unknown commands and missing
+files also return `"status":"error"`. File payloads
 are UTF-8 strings in this small protocol; production code would use binary
 framing or base64 for arbitrary files. The simulator intentionally uses minimal
 string matching instead of a third-party JSON parser.

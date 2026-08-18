@@ -14,7 +14,7 @@ class AttackSelector:
                 compatible_attacks.append(attack)
 
         return compatible_attacks
-    
+
     def rank_attacks(self, device: Device) -> list[Attack]:
         attacks = self.get_compatible_attacks(device)
 
@@ -23,7 +23,7 @@ class AttackSelector:
             key=lambda attack: attack.success_probability(),
             reverse=True,
         )
-    
+
     def select(self, device: Device) -> Attack | None:
         ranked = self.rank_attacks(device)
 

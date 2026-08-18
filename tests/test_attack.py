@@ -58,6 +58,30 @@ def test_attack_stops_after_first_failed_stage():
     first_stage = Stage("first", 0.0)
     second_stage = Stage("second", 1.0)
     second_stage.run = pytest.fail
-    attack = Attack("attack", [first_stage, second_stage], [], (0, 0), (0, 0))
+    attack = Attack("attack", [first_stage, second_stage], ["model"], (0, 0), (0, 0))
 
     assert attack.run() is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"name": ""},
+        {"stages": []},
+        {"supported_models": []},
+        {"min_ios": (18, 0), "max_ios": (17, 0)},
+        {"min_battery": 101},
+    ],
+)
+def test_attack_rejects_invalid_configuration(kwargs):
+    configuration = {
+        "name": "attack",
+        "stages": [Stage("stage", 1.0)],
+        "supported_models": ["model"],
+        "min_ios": (17, 0),
+        "max_ios": (18, 0),
+    }
+    configuration.update(kwargs)
+
+    with pytest.raises(ValueError):
+        Attack(**configuration)

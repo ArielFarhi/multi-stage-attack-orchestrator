@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,10 +11,33 @@
 
 static void send_response(int client_socket, const char *response)
 {
-    send(client_socket, response, strlen(response), 0);
+    size_t total_sent = 0;
+    size_t response_length = strlen(response);
+
+    while (total_sent < response_length)
+    {
+        ssize_t sent = send(
+            client_socket,
+            response + total_sent,
+            response_length - total_sent,
+            0
+        );
+
+        if (sent <= 0)
+        {
+            return;
+        }
+
+        total_sent += (size_t)sent;
+    }
 }
 
-static int handle_request(int client_socket, const char *request)
+static int handle_request(
+    int client_socket,
+    const char *request,
+    int *unlocked,
+    int *stages_remaining
+)
 {
     if (strstr(request, "\"command\": \"get_info\"") != NULL ||
         strstr(request, "\"command\":\"get_info\"") != NULL)
@@ -25,9 +49,49 @@ static int handle_request(int client_socket, const char *request)
         return 0;
     }
 
+    if (strstr(request, "\"command\": \"begin_attack\"") != NULL ||
+        strstr(request, "\"command\":\"begin_attack\"") != NULL)
+    {
+        const char *count_field = strstr(request, "\"stage_count\"");
+
+        if (count_field == NULL || strchr(count_field, ':') == NULL)
+        {
+            send_response(
+                client_socket,
+                "{\"status\":\"error\",\"message\":\"Missing stage_count\"}\n"
+            );
+            return 0;
+        }
+
+        int stage_count = atoi(strchr(count_field, ':') + 1);
+
+        if (stage_count <= 0)
+        {
+            send_response(
+                client_socket,
+                "{\"status\":\"error\",\"message\":\"Invalid stage_count\"}\n"
+            );
+            return 0;
+        }
+
+        *unlocked = 0;
+        *stages_remaining = stage_count;
+        send_response(client_socket, "{\"status\":\"ok\"}\n");
+        return 0;
+    }
+
     if (strstr(request, "\"command\": \"run_stage\"") != NULL ||
         strstr(request, "\"command\":\"run_stage\"") != NULL)
     {
+        if (*stages_remaining <= 0)
+        {
+            send_response(
+                client_socket,
+                "{\"status\":\"error\",\"message\":\"No active attack\"}\n"
+            );
+            return 0;
+        }
+
         if (strstr(request, "drop_connection") != NULL)
         {
             return 1;
@@ -35,11 +99,20 @@ static int handle_request(int client_socket, const char *request)
 
         if (strstr(request, "fail_stage") != NULL)
         {
+            *stages_remaining = 0;
+            *unlocked = 0;
             send_response(
                 client_socket,
                 "{\"status\":\"ok\",\"result\":\"failure\"}\n"
             );
             return 0;
+        }
+
+        (*stages_remaining)--;
+
+        if (*stages_remaining == 0)
+        {
+            *unlocked = 1;
         }
 
         send_response(
@@ -52,6 +125,15 @@ static int handle_request(int client_socket, const char *request)
     if (strstr(request, "\"command\": \"list_files\"") != NULL ||
         strstr(request, "\"command\":\"list_files\"") != NULL)
     {
+        if (!*unlocked)
+        {
+            send_response(
+                client_socket,
+                "{\"status\":\"error\",\"message\":\"Access denied\"}\n"
+            );
+            return 0;
+        }
+
         send_response(
             client_socket,
             "{\"status\":\"ok\",\"files\":[\"/data/contacts.txt\",\"/data/notes.txt\"]}\n"
@@ -62,6 +144,15 @@ static int handle_request(int client_socket, const char *request)
     if (strstr(request, "\"command\": \"read_file\"") != NULL ||
         strstr(request, "\"command\":\"read_file\"") != NULL)
     {
+        if (!*unlocked)
+        {
+            send_response(
+                client_socket,
+                "{\"status\":\"error\",\"message\":\"Access denied\"}\n"
+            );
+            return 0;
+        }
+
         if (strstr(request, "/data/contacts.txt") != NULL)
         {
             send_response(
@@ -118,6 +209,8 @@ int main(int argc, char *argv[])
     char buffer[BUFFER_SIZE];
     char request[BUFFER_SIZE];
     int port = DEFAULT_PORT;
+
+    signal(SIGPIPE, SIG_IGN);
 
     if (argc > 1)
     {
@@ -191,6 +284,8 @@ int main(int argc, char *argv[])
 
         size_t request_length = 0;
         int disconnect_requested = 0;
+        int unlocked = 0;
+        int stages_remaining = 0;
 
         while (1)
         {
@@ -213,7 +308,9 @@ int main(int argc, char *argv[])
                     request[request_length] = '\0';
                     disconnect_requested = handle_request(
                         client_socket,
-                        request
+                        request,
+                        &unlocked,
+                        &stages_remaining
                     );
                     request_length = 0;
 

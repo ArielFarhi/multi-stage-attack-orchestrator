@@ -71,14 +71,22 @@ def test_get_device_info(client):
     assert response["ios"] == "17.2"
     assert response["battery"] == 80
 
+    device = client.get_device()
+    assert device.model == "iPhone14"
+    assert device.ios_version == (17, 2)
+    assert device.battery_level == 80
+
 
 def test_run_stage(client):
+    client.begin_attack(1)
     result = client.run_stage("stage_1")
 
     assert result is True
 
 
 def test_list_files(client):
+    client.begin_attack(1)
+    client.run_stage("stage_1")
     files = client.list_files()
 
     assert "/data/contacts.txt" in files
@@ -86,18 +94,47 @@ def test_list_files(client):
 
 
 def test_read_file(client):
+    client.begin_attack(1)
+    client.run_stage("stage_1")
     data = client.read_file("/data/contacts.txt")
 
     assert data == b"Alice,123456"
 
 
 def test_read_missing_file(client):
+    client.begin_attack(1)
+    client.run_stage("stage_1")
+
     with pytest.raises(FileNotFoundError):
         client.read_file("/data/missing.txt")
 
 
+def test_files_are_locked_before_attack_completes(client):
+    client.begin_attack(2)
+    client.run_stage("stage_1")
+
+    with pytest.raises(PermissionError):
+        client.list_files()
+
+    with pytest.raises(PermissionError):
+        client.read_file("/data/contacts.txt")
+
+
+def test_failed_stage_keeps_files_locked(client):
+    client.begin_attack(1)
+
+    assert client.run_stage("fail_stage") is False
+
+    with pytest.raises(PermissionError):
+        client.list_files()
+
+
+def test_stage_requires_an_active_attack(client):
+    with pytest.raises(RuntimeError, match="No active attack"):
+        client.run_stage("stage_1")
+
+
 def test_orchestrator_runs_attack_and_extracts_all_files(client):
-    device = Device("iPhone14", (17, 2), 80)
     attack = Attack(
         name="tcp_attack",
         stages=[Stage("stage_1", 0.9), Stage("stage_2", 0.8)],
@@ -107,7 +144,7 @@ def test_orchestrator_runs_attack_and_extracts_all_files(client):
     )
     orchestrator = AttackOrchestrator(AttackSelector([attack]))
 
-    files = orchestrator.run_and_extract(device, client)
+    files = orchestrator.run_and_extract(client)
 
     assert files == {
         "/data/contacts.txt": b"Alice,123456",
@@ -141,6 +178,8 @@ def test_orchestrator_tries_next_attack_after_stage_failure(client):
 
 
 def test_connection_drops_during_stage(client):
+    client.begin_attack(1)
+
     with pytest.raises(ConnectionError):
         client.run_stage("drop_connection")
 
