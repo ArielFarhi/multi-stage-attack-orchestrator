@@ -8,5 +8,8 @@ class Stage:
         self.name = name
         self.success_probability = success_probability
 
-    def run(self) -> bool:
+    def run(self, device_client=None) -> bool:
+        if device_client is not None:
+            return device_client.run_stage(self.name)
+
         return random.random() < self.success_probability

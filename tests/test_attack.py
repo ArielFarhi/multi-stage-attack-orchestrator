@@ -30,3 +30,34 @@ def test_success_probability():
     )
 
     assert attack.success_probability() == pytest.approx(0.72)
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        Device("unsupported", (17, 2), 80),
+        Device("iPhone17", (16, 9), 80),
+        Device("iPhone17", (17, 6), 80),
+        Device("iPhone17", (17, 2), 10),
+    ],
+)
+def test_attack_rejects_incompatible_device_state(device):
+    attack = Attack(
+        "attack_a",
+        [Stage("s1", 1.0)],
+        ["iPhone17"],
+        (17, 0),
+        (17, 5),
+        min_battery=30,
+    )
+
+    assert attack.is_compatible(device) is False
+
+
+def test_attack_stops_after_first_failed_stage():
+    first_stage = Stage("first", 0.0)
+    second_stage = Stage("second", 1.0)
+    second_stage.run = pytest.fail
+    attack = Attack("attack", [first_stage, second_stage], [], (0, 0), (0, 0))
+
+    assert attack.run() is False

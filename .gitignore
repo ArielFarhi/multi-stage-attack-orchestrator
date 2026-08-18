@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Compiled C simulator
+simulator/device_simulator
+*.o

@@ -35,9 +35,9 @@ class Attack:
 
         return probability
     
-    def run(self) -> bool:
+    def run(self, device_client=None) -> bool:
         for stage in self.stages:
-            if not stage.run():
+            if not stage.run(device_client):
                 return False
 
         return True
