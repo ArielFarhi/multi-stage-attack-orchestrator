@@ -9,7 +9,7 @@ def test_attack_is_compatible():
     attack = Attack(
         name="attack_a",
         stages=[Stage("s1", 0.9)],
-        models=["iPhone17"],
+        supported_models=["iPhone17"],
         min_ios=(17, 0),
         max_ios=(17, 5),
         min_battery=30,
@@ -24,7 +24,7 @@ def test_success_probability():
             Stage("s1", 0.9),
             Stage("s2", 0.8),
         ],
-        models=["iPhone17"],
+        supported_models=["iPhone17"],
         min_ios=(17, 0),
         max_ios=(17, 5),
     )

@@ -4,19 +4,19 @@ from src.device import Device
 class Attack:
     def __init__(self, name: str, 
                  stages: list[Stage], 
-                 models: list[str], 
+                 supported_models: list[str], 
                  min_ios: tuple[int, int], 
                  max_ios: tuple[int, int], 
                  min_battery: int = 20):
         self.name = name
         self.stages = stages
-        self.models = models
+        self.supported_models = supported_models
         self.min_ios = min_ios
         self.max_ios = max_ios
         self.min_battery = min_battery
     
     def is_compatible(self, device: Device) -> bool:
-        if device.model not in self.models:
+        if device.model not in self.supported_models:
             return False
 
         if device.ios_version < self.min_ios or device.ios_version > self.max_ios:
