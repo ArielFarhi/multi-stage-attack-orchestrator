@@ -26,6 +26,33 @@ I kept device I/O behind the `DeviceClient` interface. The attack and extraction
 code therefore do not depend on sockets, and the TCP client can later be
 replaced by a real device implementation.
 
+## Design decisions and trade-offs
+
+I optimized for predictable behavior and clear failure handling rather than for
+the most flexible possible framework.
+
+The selector uses total success probability because it is easy to understand
+and compare. Multiplying stage probabilities assumes independence and ignores
+runtime and risk, but it gives the selection policy a clear meaning. If those
+factors became important, I would replace the ranking function without changing
+the attack execution code.
+
+A stage failure and a communication failure are handled differently on purpose.
+A reported stage failure is a known outcome, so trying the next compatible
+attack is reasonable. After a dropped connection, the device state is unknown,
+so the orchestrator stops instead of retrying blindly.
+
+The simulator owns the locked/unlocked state. Keeping that state only in Python
+would be simpler, but it would also allow file access without a completed chain.
+The client therefore announces the chain length and the simulator unlocks only
+after observing every successful stage.
+
+I used newline-delimited JSON because it is readable during debugging and solves
+message framing over TCP without adding a binary protocol. The C simulator uses
+a deliberately small parser rather than an external JSON library. That keeps
+the assignment self-contained, at the cost of accepting only the protocol shape
+used by this project.
+
 ## Unlocking and extraction
 
 The simulator starts each connection in a locked state. Before running a chain,
