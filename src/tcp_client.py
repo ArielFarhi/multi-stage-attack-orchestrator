@@ -1,8 +1,8 @@
 import json
 import socket
 
-from src.device_client import DeviceClient
 from src.device import Device
+from src.device_client import DeviceClient
 
 
 class TCPDeviceClient(DeviceClient):
@@ -58,9 +58,7 @@ class TCPDeviceClient(DeviceClient):
         return data.decode().strip()
 
     def get_device_info(self) -> dict:
-        return self.send_request({
-            "command": "get_info"
-        })
+        return self.send_request({"command": "get_info"})
 
     def get_device(self) -> Device:
         response = self.get_device_info()
@@ -83,24 +81,19 @@ class TCPDeviceClient(DeviceClient):
             "command": "begin_attack",
             "stage_count": stage_count,
         })
+        self._require_ok(response, "Could not begin attack")
 
-        if response.get("status") != "ok":
-            raise RuntimeError(response.get("message", "Could not begin attack"))
     def run_stage(self, stage_name: str) -> bool:
         response = self.send_request({
             "command": "run_stage",
             "stage": stage_name,
         })
-
-        if response.get("status") != "ok":
-            raise RuntimeError(response.get("message", "Stage execution failed"))
+        self._require_ok(response, "Stage execution failed")
 
         return response.get("result") == "success"
 
     def list_files(self) -> list[str]:
-        response = self.send_request({
-            "command": "list_files"
-        })
+        response = self.send_request({"command": "list_files"})
 
         if response.get("status") != "ok":
             raise PermissionError(response.get("message", "Access denied"))
@@ -120,3 +113,8 @@ class TCPDeviceClient(DeviceClient):
             raise FileNotFoundError(path)
 
         return response["data"].encode()
+
+    @staticmethod
+    def _require_ok(response: dict, default_message: str) -> None:
+        if response.get("status") != "ok":
+            raise RuntimeError(response.get("message", default_message))

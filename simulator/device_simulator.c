@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -8,6 +9,60 @@
 
 #define DEFAULT_PORT 9000
 #define BUFFER_SIZE 4096
+
+typedef struct
+{
+    int unlocked;
+    int stages_remaining;
+} DeviceState;
+
+static int is_command(const char *request, const char *expected)
+{
+    const char *field = strstr(request, "\"command\"");
+
+    if (field == NULL)
+    {
+        return 0;
+    }
+
+    const char *value = strchr(field, ':');
+
+    if (value == NULL)
+    {
+        return 0;
+    }
+
+    value++;
+    while (isspace((unsigned char)*value))
+    {
+        value++;
+    }
+
+    size_t expected_length = strlen(expected);
+    return *value == '"' &&
+           strncmp(value + 1, expected, expected_length) == 0 &&
+           value[expected_length + 1] == '"';
+}
+
+static int read_int_field(const char *request, const char *field_name, int *value)
+{
+    const char *field = strstr(request, field_name);
+
+    if (field == NULL)
+    {
+        return 0;
+    }
+
+    const char *separator = strchr(field, ':');
+
+    if (separator == NULL)
+    {
+        return 0;
+    }
+
+    *value = atoi(separator + 1);
+    return 1;
+}
 
 static void send_response(int client_socket, const char *response)
 {
@@ -35,12 +90,10 @@ static void send_response(int client_socket, const char *response)
 static int handle_request(
     int client_socket,
     const char *request,
-    int *unlocked,
-    int *stages_remaining
+    DeviceState *state
 )
 {
-    if (strstr(request, "\"command\": \"get_info\"") != NULL ||
-        strstr(request, "\"command\":\"get_info\"") != NULL)
+    if (is_command(request, "get_info"))
     {
         send_response(
             client_socket,
@@ -49,12 +102,11 @@ static int handle_request(
         return 0;
     }
 
-    if (strstr(request, "\"command\": \"begin_attack\"") != NULL ||
-        strstr(request, "\"command\":\"begin_attack\"") != NULL)
+    if (is_command(request, "begin_attack"))
     {
-        const char *count_field = strstr(request, "\"stage_count\"");
+        int stage_count;
 
-        if (count_field == NULL || strchr(count_field, ':') == NULL)
+        if (!read_int_field(request, "\"stage_count\"", &stage_count))
         {
             send_response(
                 client_socket,
@@ -62,8 +114,6 @@ static int handle_request(
             );
             return 0;
         }
-
-        int stage_count = atoi(strchr(count_field, ':') + 1);
 
         if (stage_count <= 0)
         {
@@ -74,16 +124,15 @@ static int handle_request(
             return 0;
         }
 
-        *unlocked = 0;
-        *stages_remaining = stage_count;
+        state->unlocked = 0;
+        state->stages_remaining = stage_count;
         send_response(client_socket, "{\"status\":\"ok\"}\n");
         return 0;
     }
 
-    if (strstr(request, "\"command\": \"run_stage\"") != NULL ||
-        strstr(request, "\"command\":\"run_stage\"") != NULL)
+    if (is_command(request, "run_stage"))
     {
-        if (*stages_remaining <= 0)
+        if (state->stages_remaining <= 0)
         {
             send_response(
                 client_socket,
@@ -99,8 +148,8 @@ static int handle_request(
 
         if (strstr(request, "fail_stage") != NULL)
         {
-            *stages_remaining = 0;
-            *unlocked = 0;
+            state->stages_remaining = 0;
+            state->unlocked = 0;
             send_response(
                 client_socket,
                 "{\"status\":\"ok\",\"result\":\"failure\"}\n"
@@ -108,11 +157,11 @@ static int handle_request(
             return 0;
         }
 
-        (*stages_remaining)--;
+        state->stages_remaining--;
 
-        if (*stages_remaining == 0)
+        if (state->stages_remaining == 0)
         {
-            *unlocked = 1;
+            state->unlocked = 1;
         }
 
         send_response(
@@ -122,10 +171,9 @@ static int handle_request(
         return 0;
     }
 
-    if (strstr(request, "\"command\": \"list_files\"") != NULL ||
-        strstr(request, "\"command\":\"list_files\"") != NULL)
+    if (is_command(request, "list_files"))
     {
-        if (!*unlocked)
+        if (!state->unlocked)
         {
             send_response(
                 client_socket,
@@ -141,10 +189,9 @@ static int handle_request(
         return 0;
     }
 
-    if (strstr(request, "\"command\": \"read_file\"") != NULL ||
-        strstr(request, "\"command\":\"read_file\"") != NULL)
+    if (is_command(request, "read_file"))
     {
-        if (!*unlocked)
+        if (!state->unlocked)
         {
             send_response(
                 client_socket,
@@ -178,8 +225,7 @@ static int handle_request(
         return 0;
     }
 
-    if (strstr(request, "\"command\": \"disconnect\"") != NULL ||
-        strstr(request, "\"command\":\"disconnect\"") != NULL)
+    if (is_command(request, "disconnect"))
     {
         send_response(
             client_socket,
@@ -284,8 +330,7 @@ int main(int argc, char *argv[])
 
         size_t request_length = 0;
         int disconnect_requested = 0;
-        int unlocked = 0;
-        int stages_remaining = 0;
+        DeviceState state = {0};
 
         while (1)
         {
@@ -309,8 +354,7 @@ int main(int argc, char *argv[])
                     disconnect_requested = handle_request(
                         client_socket,
                         request,
-                        &unlocked,
-                        &stages_remaining
+                        &state
                     );
                     request_length = 0;
 

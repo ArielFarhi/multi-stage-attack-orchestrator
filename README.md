@@ -1,96 +1,105 @@
 # Multi-Stage Attack Orchestrator
 
-A Python framework that selects and runs a compatible multi-stage attack, then
-extracts files from a simulated device over TCP. The simulator is written in C.
+This is my implementation of a small attack orchestration framework. The Python
+side chooses and runs an attack, while a C program simulates the device and
+exposes a simple TCP interface.
 
-## Design
+## How I approached it
 
-- `Device` describes the model, iOS version, and battery level.
-- `Stage` has a name and an estimated probability of success.
-- `Attack` contains an ordered, configurable list of stages and compatibility
-  constraints.
-- `AttackSelector` filters incompatible attacks and ranks the rest by total
-  estimated success probability. The total is the product of the individual
-  stage probabilities, assuming independent stages.
-- `AttackOrchestrator` tries ranked attacks in order. A failed stage stops that
-  attack immediately; the next compatible attack is then attempted.
-- `DeviceClient` is the boundary between the framework and a device.
-  `TCPDeviceClient` implements it using the simulator's protocol.
-- `Extractor` reads one file or all files exposed by the device.
+An attack is an ordered list of stages. Each stage has an estimated chance of
+success, so I rank compatible attacks by multiplying their stage probabilities.
+For example, an attack with probabilities `0.9` and `0.8` gets a score of
+`0.72`. This assumes the stages are independent. It is intentionally a simple
+policy; in a real system I would probably include execution time, risk and the
+cost of a failed attempt as well.
 
-The simulator keeps attack progress and an `unlocked` state per connection.
-Before an attack, the client announces its stage count. The simulator decrements
-that count after each successful stage and unlocks file access only when every
-stage has succeeded. A failed stage resets progress, and a new connection starts
-locked again.
+Before ranking, attacks are filtered by model, iOS range and minimum battery.
+The connected flow reads those values from the device rather than relying on
+caller-provided state.
 
-Stages can run without a device client for unit testing of the probabilistic
-model. In an integrated run, stage names are sent to the device and the device's
-result is authoritative; probabilities rank attacks rather than causing a
-second random decision.
+Stages run in order and fail fast. A normal stage failure stops the current
+chain, after which the orchestrator tries the next compatible attack. A dropped
+connection is treated differently: it raises `ConnectionError` and stops the
+run because the device may now be in an unknown state.
 
-`AttackOrchestrator.run_and_extract()` reads the current device information from
-the client and connects the complete workflow: select an attack, run its stages,
-and extract all files after success. A normal stage
-failure allows fallback to another attack. A transport failure raises
-`ConnectionError` because device state is unknown and retrying may be unsafe.
+I kept device I/O behind the `DeviceClient` interface. The attack and extraction
+code therefore do not depend on sockets, and the TCP client can later be
+replaced by a real device implementation.
+
+## Unlocking and extraction
+
+The simulator starts each connection in a locked state. Before running a chain,
+the client sends its stage count. The simulator tracks successful stages and
+only enables file access when the whole chain has completed. A failed stage
+clears the progress.
+
+`Extractor.extract_file(path)` reads one file. `Extractor.extract_all()` asks
+the device for its file list and reads every returned path. The orchestrator's
+`run_and_extract()` method ties the full flow together: read device state,
+choose an attack, run it, and extract the files if it succeeds.
 
 ## TCP protocol
 
-The client connects to `127.0.0.1:9000` by default. The simulator also accepts a
-port as its first argument. Each request and response is one newline-delimited
-JSON object.
+The protocol is newline-delimited JSON: one JSON object per line in each
+direction. TCP is a byte stream, so the simulator buffers input until it sees a
+newline rather than assuming that one `recv()` call contains one request.
 
-| Operation | Request | Successful response |
-| --- | --- | --- |
-| Device info | `{"command":"get_info"}` | `{"status":"ok","model":"iPhone14","ios":"17.2","battery":80}` |
-| Begin attack | `{"command":"begin_attack","stage_count":2}` | `{"status":"ok"}` |
-| Run stage | `{"command":"run_stage","stage":"stage_1"}` | `{"status":"ok","result":"success"}` |
-| List files | `{"command":"list_files"}` | `{"status":"ok","files":[...]}` |
-| Read file | `{"command":"read_file","path":"/data/contacts.txt"}` | `{"status":"ok","data":"Alice,123456"}` |
-| Disconnect | `{"command":"disconnect"}` | `{"status":"ok"}`, followed by socket close |
+The supported commands are:
 
-Simulator-only stage names used to exercise failures:
+- `get_info` returns the model, iOS version and battery level.
+- `begin_attack` starts a chain and includes `stage_count`.
+- `run_stage` runs the named stage and returns `success` or `failure`.
+- `list_files` returns the available paths after the device is unlocked.
+- `read_file` returns the contents of one path.
+- `disconnect` closes the session cleanly.
 
-- `fail_stage` returns a normal `failure` result.
-- `drop_connection` closes the connection without a response.
+For example, a request to run a stage looks like this:
 
-Until all announced stages succeed, file operations return
-`{"status":"error","message":"Access denied"}`. Unknown commands and missing
-files also return `"status":"error"`. File payloads
-are UTF-8 strings in this small protocol; production code would use binary
-framing or base64 for arbitrary files. The simulator intentionally uses minimal
-string matching instead of a third-party JSON parser.
+```json
+{"command": "run_stage", "stage": "stage_1"}
+```
 
-## Running the project
+and a successful response is:
 
-Requirements are Python 3.10 or newer and a `gcc` compiler. Install and test:
+```json
+{"status": "ok", "result": "success"}
+```
+
+The simulator also recognizes two stage names used by the integration tests:
+`fail_stage` returns a normal failure, while `drop_connection` closes the socket
+without replying. File operations before unlock return `Access denied`.
+
+The C code deliberately avoids an external JSON dependency and only parses the
+small, known command format used here. File contents are UTF-8 strings rather
+than arbitrary binary data. Both are reasonable shortcuts for this simulator,
+but not choices I would carry into a production protocol.
+
+## Running it
+
+Python 3.10 or newer and `gcc` are required.
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest
 ```
 
-Integration tests compile and start the simulator automatically on an available
-local port. To run it manually on the default port:
+The integration tests compile the C simulator and start it on an available
+local port. To run the simulator manually on port 9000:
 
 ```bash
 gcc -Wall -Wextra simulator/device_simulator.c -o simulator/device_simulator
 ./simulator/device_simulator
 ```
 
-The compiled binary is intentionally excluded from Git.
+The compiled binary is ignored by Git.
 
-## Test coverage
+## Tests and scope
 
-The suite covers compatibility, probability calculation, ranking, chain
-short-circuiting, fallback, and extraction. Integration tests use the real C
-simulator for device information, stage execution, file operations, missing
-files, connection drops, and the complete select-run-extract workflow.
+The tests cover compatibility checks, probability-based ranking, fail-fast
+chains, fallback to another attack, locked file access, extraction, missing
+files and connection drops. The integration suite uses the compiled C process,
+not a mock.
 
-## Deliberate limitations
-
-This assignment implementation is single-client and single-threaded. It has no
-authentication or encryption, and its in-memory files are fixed fixtures. These
-choices keep it focused on orchestration, failure semantics, and the Python/C
-process boundary.
+The simulator is intentionally single-threaded and holds a small fixed set of
+files in memory. Authentication, encryption, persistence and concurrent clients
+are outside the scope of this assignment.

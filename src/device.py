@@ -8,10 +8,12 @@ class Device:
         if not model:
             raise ValueError("model must not be empty")
 
-        if (
-            len(ios_version) != 2
-            or not all(isinstance(part, int) and part >= 0 for part in ios_version)
-        ):
+        if len(ios_version) != 2:
+            raise ValueError("ios_version must contain two non-negative integers")
+
+        major, minor = ios_version
+
+        if major < 0 or minor < 0:
             raise ValueError("ios_version must contain two non-negative integers")
 
         if not 0 <= battery_level <= 100:
